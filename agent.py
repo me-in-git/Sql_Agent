@@ -3,7 +3,6 @@
 import os
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import create_sql_agent
-from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 
 def create_agent():
