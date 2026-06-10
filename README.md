@@ -15,7 +15,7 @@ No SQL knowledge required.
 
 ## Demo
 
-> Deployed on HuggingFace Spaces: [link here]
+> Deployed on HuggingFace Spaces: [https://me-in-git-sql-agent-app-imrld8.streamlit.app/]
 
 ---
 
@@ -42,7 +42,7 @@ LangChain SQL Agent
     ├── generate_sql()          # LLM writes SQL from schema + query
     ├── execute_sql()           # Runs against SQLite
     │       │
-    │       └── on failure ──► retry with error feedback (max 3 attempts)
+    │       └── on failure ──► retry with error feedback 
     │
     └── generate_answer()       # LLM summarizes result in natural language
     │
@@ -135,9 +135,3 @@ querymind/
 - Query history and export
 - Multi-database support (PostgreSQL, MySQL)
 - Fine-tuned text-to-SQL model as a faster/cheaper alternative to general LLM
-
----
-
-## License
-
-MIT
