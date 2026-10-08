@@ -1,125 +1,72 @@
-"""Streamlit app for QueryMind - Natural Language SQL Agent."""
+"""Streamlit UI for QueryMind: ask questions about the Chinook database in plain English."""
 
+import pandas as pd
 import streamlit as st
-import os
 from dotenv import load_dotenv
-from agent import create_agent, get_schema_info
+
+from querymind import ReadOnlyDatabase, SQLAgent
 
 load_dotenv()
+st.set_page_config(page_title="QueryMind", layout="wide")
+st.title("QueryMind")
+st.caption("Natural-language questions → read-only SQL over the Chinook music store database")
 
-st.set_page_config(
-    page_title="QueryMind",
-    page_icon="🧠",
-    layout="wide"
-)
 
-st.title("🧠 QueryMind")
-st.markdown("**Natural Language SQL Agent** — Ask questions, get answers. No SQL required.")
+@st.cache_resource
+def get_db() -> ReadOnlyDatabase:
+    return ReadOnlyDatabase()
 
-# Check for API key first
-if not os.getenv("OPENAI_API_KEY") and not os.getenv("GROQ_API_KEY"):
-    st.warning("**API Key Required**")
-    st.markdown("""
-    Please configure your API key to use QueryMind:
-    
-    1. Copy the environment file:
-       ```bash
-       cp .env.example .env
-       ```
-    
-    2. Edit `.env` and add ONE of:
-       ```
-       OPENAI_API_KEY=sk-your-key-here
-       # or
-       GROQ_API_KEY=your-groq-key-here
-       ```
-    
-    3. Save the file and refresh this page
-    
-    **Get API Keys:**
-    - [OpenAI API Key](https://platform.openai.com/api-keys) (Paid)
-    - [Groq API Key](https://console.groq.com) (FREE!)
-    """)
-    st.stop()
 
-# Initialize session state
-if "agent" not in st.session_state:
-    try:
-        st.session_state.agent, st.session_state.db = create_agent()
-        st.session_state.messages = []
-    except Exception as e:
-        st.error(f"Failed to initialize agent: {e}")
-        st.info("Make sure your API key is set in the .env file and try refreshing the page.")
-        st.stop()
+def get_agent() -> SQLAgent | None:
+    if "agent" not in st.session_state:
+        from querymind.llm import OpenAICompatibleLLM
 
-# Sidebar with database info
-with st.sidebar:
-    st.header(" Database Info")
-    if st.session_state.db:
-        st.write("**Tables:**")
-        tables = st.session_state.db.get_usable_table_names()
-        for table in tables:
-            st.write(f"• {table}")
-
-# Main interface
-st.header("Ask Your Question")
-
-user_query = st.text_input(
-    "What would you like to know?",
-    placeholder="e.g., Which artist generated the most revenue in 2010?"
-)
-
-col1, col2 = st.columns([3, 1])
-
-with col2:
-    submit_button = st.button("🔍 Search", use_container_width=True)
-
-if submit_button and user_query:
-    with st.spinner("Thinking..."):
         try:
-            result = st.session_state.agent.invoke({"input": user_query})
-            
-            # Handle result format
-            if isinstance(result, dict):
-                answer = result.get("output", str(result))
-            else:
-                answer = str(result)
-            
-            # Display result
-            st.success("✅ Query executed successfully")
-            
-            st.subheader("📝 Answer")
-            st.write(answer)
-            
-            # Store in conversation memory
-            st.session_state.messages.append({
-                "query": user_query,
-                "answer": answer
-            })
-            
-        except Exception as e:
-            error_msg = str(e)
-            st.error(f"Error: {error_msg}")
-            if "max iterations" in error_msg.lower():
-                st.info("💡 The query was complex. Try a simpler question or check your database schema.")
+            st.session_state.agent = SQLAgent(OpenAICompatibleLLM(), get_db())
+        except RuntimeError as exc:
+            st.error(f"{exc}. Copy `.env.example` to `.env` and add a key (Groq keys are free).")
+            return None
+        st.session_state.turns = []
+    return st.session_state.agent
 
-# Display conversation history
-if st.session_state.messages:
-    st.header("💬 Conversation History")
-    for i, msg in enumerate(st.session_state.messages):
-        with st.expander(f"Q{i+1}: {msg['query'][:50]}..."):
-            st.write(f"**Question:** {msg['query']}")
-            st.write(f"**Answer:** {msg['answer']}")
 
-# Example queries section
-with st.expander("💡 Example Queries"):
-    st.markdown("""
-    - "Which genre has the most tracks?"
-    - "Top 5 customers by total spending?"
-    - "Which employee has the most customers assigned?"
-    - "What percentage of tracks are longer than 5 minutes?"
-    - "Which album has the highest average track price?"
-    """)
+with st.sidebar:
+    st.header("Database")
+    db = get_db()
+    for (table,) in db.run("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").rows:
+        count = db.run(f'SELECT COUNT(*) FROM "{table}"').rows[0][0]
+        st.write(f"`{table}` — {count:,} rows")
+    if st.button("Clear conversation"):
+        st.session_state.pop("agent", None)
+        st.rerun()
+    st.markdown("**Try:**\n- Which artist generated the most revenue?\n- And the top 3 genres?\n"
+                "- How many tracks have never been purchased?\n- Who does Steve Johnson report to?")
 
-st.divider()
-st.caption("Powered by LangChain, OpenAI/Groq, and SQLite")
+agent = get_agent()
+if agent:
+    for turn in st.session_state.turns:
+        with st.chat_message("user"):
+            st.write(turn.question)
+        with st.chat_message("assistant"):
+            st.write(turn.answer)
+            if turn.sql:
+                st.code(turn.sql, language="sql")
+            if turn.result is not None and turn.result.rows:
+                st.dataframe(pd.DataFrame(turn.result.rows, columns=turn.result.columns), hide_index=True)
+                if turn.result.truncated:
+                    st.caption(f"Showing the first {len(turn.result.rows)} rows.")
+            failed = [a for a in turn.attempts if a.error]
+            if failed:
+                with st.expander(f"{len(failed)} failed attempt(s) repaired" if turn.ok else "Attempts"):
+                    for a in failed:
+                        st.code(a.sql, language="sql")
+                        st.caption(f"Error: {a.error}")
+            st.caption(f"{turn.latency_s:.1f}s · {len(turn.attempts)} attempt(s)")
+
+    if question := st.chat_input("Ask a question about the music store…"):
+        with st.spinner("Writing and running SQL…"):
+            try:
+                st.session_state.turns.append(agent.ask(question))
+            except Exception as exc:  # network / provider errors
+                st.error(f"LLM request failed: {exc}")
+        st.rerun()
