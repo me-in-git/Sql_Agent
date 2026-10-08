@@ -1,137 +1,49 @@
-# QueryMind 
-### Natural Language SQL Agent — ask questions, get answers, no SQL required.
----
+# QueryMind
 
-## What is this?
+Ask questions about a SQL database in plain English. An LLM writes the query, it runs read-only
+against SQLite, and you get the answer along with the SQL and the result table.
 
-QueryMind is an agentic SQL system that lets you query a relational database in plain English. Under the hood, an LLM agent inspects the database schema, writes SQL, executes it, and returns a natural language answer — retrying automatically if the query fails.
+Uses the [Chinook](https://github.com/lerocha/chinook-database) music store database (11 tables, ~15k rows).
 
-> **"Which artist generated the most revenue in 2010?"**
-> → Agent inspects schema → writes JOIN query → executes → returns answer with the SQL shown.
+## How it works
 
-No SQL knowledge required.
+1. The model gets the schema, a couple of sample rows per table, and the last few questions with their SQL,
+   so follow-ups like "and for Canada?" work.
+2. The SQL runs against the database opened read-only. A SQLite authorizer only allows reads, and long
+   queries are cut off by a timeout.
+3. If the query fails, the error goes back to the model to fix (up to 3 tries).
+4. The model writes a short answer from the result rows.
 
----
+## Results
 
-## Demo
+`eval/questions.json` has 40 questions with hand-written gold SQL: 10 each of easy, medium, hard and
+"expert" (window functions, recursive CTEs, year-over-year growth). An answer counts if its result matches
+the gold result.
 
-> Deployed on HuggingFace Spaces: [https://me-in-git-sql-agent-app-imrld8.streamlit.app/]
+| model (Groq) | accuracy | expert |
+|---|---|---|
+| gpt-oss-120b | 40/40 | 10/10 |
+| qwen3.8-27b | 38/40 | 8/10 |
 
----
-
-## Features
-
-- **Natural language to SQL** — powered by LangChain's SQL agent + OpenAI/Groq
-- **Schema-aware query repair** — if generated SQL fails, the agent retries with the error message as feedback
-- **Query transparency** — every answer shows the SQL that produced it
-- **Multi-table reasoning** — handles JOINs, aggregations, and nested queries across 11 tables
-- **Conversation memory** — maintains context across follow-up questions
-- **Chinook database** — ships with a real-world music store dataset (artists, albums, tracks, invoices, customers)
-
----
-
-## Architecture
-
-```
-User Query
-    │
-    ▼
-LangChain SQL Agent
-    │
-    ├── inspect_schema()        # Lists tables + columns
-    ├── generate_sql()          # LLM writes SQL from schema + query
-    ├── execute_sql()           # Runs against SQLite
-    │       │
-    │       └── on failure ──► retry with error feedback 
-    │
-    └── generate_answer()       # LLM summarizes result in natural language
-    │
-    ▼
-Streamlit UI (query + SQL + answer)
-```
-
----
-
-## Quickstart
+Both Qwen misses were the same mistake: counting rows inside each group instead of counting the groups.
 
 ```bash
-# Clone the repo
-git clone https://github.com/your-username/querymind
-cd querymind
+python -m eval.run_eval --out results.json
+```
 
-# Install dependencies
+## Running it
+
+```bash
 pip install -r requirements.txt
-
-# Add your API key
-cp .env.example .env
-# Edit .env and add OPENAI_API_KEY or GROQ_API_KEY
-
-# Run
+cp .env.example .env      # add GROQ_API_KEY (or OPENAI_API_KEY)
 streamlit run app.py
+pytest                    # no API key needed
 ```
 
----
+## Notes
 
-## Project Structure
+- Putting the whole schema in the prompt works for 11 tables; a bigger database would need to pick
+  relevant tables first.
+- 40 questions is a small benchmark.
 
-```
-querymind/
-├── app.py               # Streamlit UI
-├── agent.py             # LangChain SQL agent setup
-├── database/
-│   └── chinook.db       # SQLite database (ships with repo)
-├── requirements.txt
-├── .env.example
-└── README.md
-```
-
----
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Agent Framework | LangChain SQL Agent |
-| LLM | Groq (llama-3.3-70b) / OpenAI GPT-4o |
-| Database | SQLite (Chinook) |
-| UI | Streamlit |
-| Deployment | HuggingFace Spaces |
-
----
-
-## Example Queries
-
-```
-"Which genre has the most tracks?"
-"Top 5 customers by total spending?"
-"Which employee has the most customers assigned?"
-"What percentage of tracks are longer than 5 minutes?"
-"Which album has the highest average track price?"
-```
-
----
-
-## Key Design Decisions
-
-**Schema-aware retry:** If the LLM generates invalid SQL, the agent feeds the SQLite error message back as context and retries (up to 3 times). This handles column name hallucinations and JOIN errors without user intervention.
-
-**SQL transparency:** Every answer surfaces the raw SQL query that produced it. This makes the agent auditable — users can verify correctness without trusting the LLM blindly.
-
-**Groq for speed:** Using Groq's inference API keeps response latency low even for multi-step agent traces.
-
----
-
-## Limitations
-
-- Read-only queries only (no INSERT/UPDATE/DELETE)
-- Works best on well-structured relational databases; unstructured or denormalized schemas degrade performance
-- LLM may occasionally hallucinate column names on first attempt — mitigated by retry mechanism
-
----
-
-## Future Work
-
-- Support for uploaded user databases (CSV → SQLite auto-conversion)
-- Query history and export
-- Multi-database support (PostgreSQL, MySQL)
-- Fine-tuned text-to-SQL model as a faster/cheaper alternative to general LLM
+Chinook database © Luis Rocha (see `database/CHINOOK_LICENSE.md`).
